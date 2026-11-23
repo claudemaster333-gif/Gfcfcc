@@ -1,0 +1,405 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project
+        run: |
+          set -e
+          for f in 14912.mp4 14857.mp4; do [ -f "$f" ] || { echo "Upload $f to the repo root"; exit 1; }; done
+          P=proj/app/src/main
+          mkdir -p $P/java/com/example/prank $P/res/raw $P/res/drawable $P/res/values
+          cp 14912.mp4 $P/res/raw/scream.mp4
+          cp 14857.mp4 $P/res/raw/boss.mp4
+          cat > proj/settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "antivirus"
+          include(":app")
+          EOF
+          cat > proj/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.2.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+          }
+          EOF
+          cat > proj/gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+          cat > proj/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.example.prank"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.prank"
+                  minSdk = 27
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("androidx.appcompat:appcompat:1.6.1")
+          }
+          EOF
+          cat > $P/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="antivirus"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <activity
+                      android:name=".VideoActivity"
+                      android:theme="@style/PrankTheme"
+                      android:exported="false"
+                      android:excludeFromRecents="true"
+                      android:launchMode="singleTask" />
+              </application>
+          </manifest>
+          EOF
+          cat > $P/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="PrankTheme" parent="Theme.AppCompat.NoActionBar">
+                  <item name="android:windowIsTranslucent">true</item>
+                  <item name="android:windowBackground">@android:color/transparent</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:backgroundDimEnabled">false</item>
+              </style>
+          </resources>
+          EOF
+          cat > $P/res/drawable/ic_launcher.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#1E88E5"
+                  android:pathData="M54,14 L88,28 L88,54 C88,74 73,90 54,96 C35,90 20,74 20,54 L20,28 Z" />
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M46,60 L36,50 L31,55 L46,70 L77,39 L72,34 Z" />
+          </vector>
+          EOF
+          cat > $P/java/com/example/prank/MainActivity.kt <<'EOF'
+          package com.example.prank
+
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.TextView
+          import android.widget.Toast
+          import androidx.appcompat.app.AppCompatActivity
+
+          class MainActivity : AppCompatActivity() {
+              private var asked = false
+              private var started = false
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(TextView(this).apply {
+                      text = "привет медвет"
+                      textSize = 32f
+                      gravity = Gravity.CENTER
+                  })
+              }
+
+              // Якщо дозволу ще нема - просимо один раз, і після повернення з налаштувань усе
+              // запускається САМЕ, без повторного відкриття додатку.
+              override fun onResume() {
+                  super.onResume()
+                  if (started) return
+                  if (Settings.canDrawOverlays(this)) {
+                      started = true
+                      go()
+                  } else if (!asked) {
+                      asked = true
+                      Toast.makeText(this, "Увімкни «Поверх інших додатків» і поверніся назад", Toast.LENGTH_LONG).show()
+                      startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                  } else {
+                      Toast.makeText(this, "Без цього дозволу додаток не працює", Toast.LENGTH_LONG).show()
+                      finish()
+                  }
+              }
+
+              private fun go() {
+                  val appCtx = applicationContext
+                  val hd = Handler(Looper.getMainLooper())
+                  hd.postDelayed({
+                      moveTaskToBack(true)                      // викидає на робочий стіл
+                      hd.postDelayed({
+                          appCtx.startActivity(
+                              Intent(appCtx, VideoActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          )
+                          finish()
+                      }, 2000)
+                  }, 2000)
+              }
+          }
+          EOF
+          cat > $P/java/com/example/prank/VideoActivity.kt <<'EOF'
+          package com.example.prank
+
+          import android.content.Context
+          import android.graphics.*
+          import android.media.AudioManager
+          import android.net.Uri
+          import android.os.*
+          import android.view.*
+          import android.widget.FrameLayout
+          import android.widget.VideoView
+          import androidx.appcompat.app.AppCompatActivity
+          import kotlin.random.Random
+
+          class VideoActivity : AppCompatActivity() {
+              private lateinit var root: FrameLayout
+              private lateinit var audio: AudioManager
+              private var oldVol = 0
+              private val hd = Handler(Looper.getMainLooper())
+              private val presses = ArrayList<Long>()
+              private var game: Game? = null
+
+              @Suppress("DEPRECATION")
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  setShowWhenLocked(true); setTurnScreenOn(true)
+                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                  window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or
+                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                  oldVol = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                  val t = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 70 / 100
+                  if (oldVol < t) audio.setStreamVolume(AudioManager.STREAM_MUSIC, t, 0)
+                  root = FrameLayout(this); setContentView(root)
+                  scream()
+              }
+
+              // 1) скрімер на весь екран
+              private fun scream() {
+                  root.setBackgroundColor(Color.BLACK)
+                  val v = VideoView(this)
+                  root.addView(v, FrameLayout.LayoutParams(-1, -1))
+                  v.setVideoURI(Uri.parse("android.resource://$packageName/${R.raw.scream}"))
+                  v.setOnCompletionListener { root.post { intro() } }
+                  v.setOnErrorListener { _, _, _ -> root.post { intro() }; true }
+                  v.start()
+              }
+
+              // 2) відео з Наротаном на весь екран - перший раз лише 5 секунд
+              private fun intro() {
+                  root.removeAllViews()
+                  root.setBackgroundColor(Color.BLACK)
+                  val v = VideoView(this)
+                  root.addView(v, FrameLayout.LayoutParams(-1, -1))
+                  v.setVideoURI(Uri.parse("android.resource://$packageName/${R.raw.boss}"))
+                  var done = false
+                  fun next() {
+                      if (done) return
+                      done = true
+                      root.post { fight() }
+                  }
+                  v.setOnCompletionListener { next() }
+                  v.setOnErrorListener { _, _, _ -> next(); true }
+                  hd.postDelayed({ next() }, 5000)
+                  v.start()
+              }
+
+              // 3) боссфайт на фоні справжнього робочого столу (вікно прозоре)
+              private fun fight() {
+                  root.removeAllViews()
+                  root.setBackgroundColor(Color.TRANSPARENT)
+                  game = Game(this, root.width, root.height).also { root.addView(it); it.start() }
+              }
+
+              // 3 рази "гучність +" за 3 секунди = закрити все
+              override fun onKeyDown(k: Int, e: KeyEvent): Boolean {
+                  if (k == KeyEvent.KEYCODE_VOLUME_UP) {
+                      if (e.repeatCount == 0) {
+                          val n = SystemClock.uptimeMillis()
+                          presses.add(n); presses.removeAll { n - it > 3000 }
+                          if (presses.size >= 3) finish()
+                      }
+                      return true
+                  }
+                  return super.onKeyDown(k, e)
+              }
+
+              override fun onDestroy() {
+                  game?.stop(); hd.removeCallbacksAndMessages(null)
+                  runCatching { audio.setStreamVolume(AudioManager.STREAM_MUSIC, oldVol, 0) }
+                  super.onDestroy()
+              }
+
+              // Бос = відео з Наротаном, гравець = відео-скрімер. Тягни пальцем, стріляє саме.
+              inner class Game(ctx: Context, private val w: Int, private val h: Int) : FrameLayout(ctx) {
+                  private val d = resources.displayMetrics.density
+                  private val bw = (w * 0.36f).toInt()
+                  private val bh = (bw * 16 / 9f).toInt()
+                  private val pw = (w * 0.20f).toInt()
+                  private val ph = (pw * 16 / 9f).toInt()
+                  private val by0 = h * 0.05f
+                  private var bx = (w - bw) / 2f
+                  private var dir = 1
+                  private var px = (w - pw) / 2f
+                  private var py = h * 0.70f
+                  private var hp = 100
+                  private var lives = 3
+                  private val mine = ArrayList<RectF>()
+                  private val theirs = ArrayList<RectF>()
+                  private var t1 = 0L
+                  private var t2 = 0L
+                  private var msg = ""
+                  private var msgUntil = 0L
+                  private var won = false
+                  private var run = true
+                  private val t0 = SystemClock.uptimeMillis()
+                  private var last = t0
+                  private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+                  private val cols = intArrayOf(Color.CYAN, Color.MAGENTA, Color.GREEN, Color.BLACK, Color.WHITE, Color.RED)
+                  private val bossV = VideoView(ctx)
+                  private val plV = VideoView(ctx)
+                  private val fx = Fx(ctx)
+
+                  init {
+                      bossV.setZOrderMediaOverlay(true); plV.setZOrderMediaOverlay(true)
+                      addView(bossV, LayoutParams(bw, bh))
+                      addView(plV, LayoutParams(pw, ph))
+                      addView(fx, LayoutParams(-1, -1))
+                      bossV.setVideoURI(Uri.parse("android.resource://$packageName/${R.raw.boss}"))
+                      bossV.setOnPreparedListener { it.isLooping = true }
+                      plV.setVideoURI(Uri.parse("android.resource://$packageName/${R.raw.scream}"))
+                      plV.setOnPreparedListener { it.isLooping = true; it.setVolume(0f, 0f) }
+                  }
+
+                  private val tk = object : Runnable {
+                      override fun run() {
+                          if (!run) return
+                          val n = SystemClock.uptimeMillis()
+                          val dt = (n - last).coerceAtMost(50); last = n
+                          step(dt, n)
+                          bossV.x = bx; bossV.y = by0
+                          plV.x = px; plV.y = py
+                          fx.invalidate()
+                          hd.postDelayed(this, 16)
+                      }
+                  }
+                  fun start() { bossV.start(); plV.start(); tk.run() }
+                  fun stop() { run = false; hd.removeCallbacks(tk) }
+
+                  private fun step(dt: Long, n: Long) {
+                      if (won) return
+                      bx += dir * w * 0.0003f * dt
+                      if (bx < 0) { bx = 0f; dir = 1 }
+                      if (bx > w - bw) { bx = (w - bw).toFloat(); dir = -1 }
+                      if (n - t1 > 260) { t1 = n; val c = px + pw / 2; mine.add(RectF(c - 5 * d, py - 24 * d, c + 5 * d, py)) }
+                      if (n - t2 > 850) {
+                          t2 = n
+                          val c = bx + bw / 2 + Random.nextInt(-(bw / 3), bw / 3)
+                          theirs.add(RectF(c - 9 * d, by0 + bh * 0.8f, c + 9 * d, by0 + bh * 0.8f + 18 * d))
+                      }
+                      val up = h * 0.0011f * dt
+                      val dn = h * 0.0007f * dt
+                      val boss = RectF(bx + bw * 0.1f, by0, bx + bw * 0.9f, by0 + bh)
+                      val me = RectF(px + pw * 0.15f, py + ph * 0.1f, px + pw * 0.85f, py + ph)
+                      val i = mine.iterator()
+                      while (i.hasNext()) {
+                          val s = i.next(); s.offset(0f, -up)
+                          if (RectF.intersects(s, boss)) { i.remove(); hp -= 2 } else if (s.bottom < 0) i.remove()
+                      }
+                      val j = theirs.iterator()
+                      while (j.hasNext()) {
+                          val s = j.next(); s.offset(0f, dn)
+                          if (RectF.intersects(s, me)) { j.remove(); lives-- } else if (s.top > h) j.remove()
+                      }
+                      if (hp <= 0) {
+                          won = true; msg = "ПЕРЕМОГА!"; msgUntil = Long.MAX_VALUE
+                          hd.postDelayed({ finish() }, 1800)
+                      } else if (lives <= 0) {
+                          hp = 100; lives = 3; mine.clear(); theirs.clear()
+                          msg = "ПРОГРАВ! ЩЕ РАЗ!"; msgUntil = n + 1200
+                      }
+                  }
+
+                  // Шар поверх відео: кулі, смужка здоров'я, життя, текст і фейковий "краш" екрана
+                  inner class Fx(ctx: Context) : View(ctx) {
+                      override fun onDraw(c: Canvas) {
+                          val n = SystemClock.uptimeMillis()
+                          p.style = Paint.Style.FILL
+                          p.color = Color.YELLOW; for (s in mine) c.drawRect(s, p)
+                          p.color = Color.RED; for (s in theirs) c.drawRect(s, p)
+                          p.color = Color.argb(160, 0, 0, 0); c.drawRect(20 * d, 8 * d, w - 20 * d, 24 * d, p)
+                          p.color = Color.RED; c.drawRect(20 * d, 8 * d, 20 * d + (w - 40 * d) * hp.coerceAtLeast(0) / 100f, 24 * d, p)
+                          p.color = Color.WHITE; p.textSize = 22 * d; p.textAlign = Paint.Align.LEFT
+                          c.drawText("♥".repeat(lives.coerceAtLeast(0)), 20 * d, h - 12 * d, p)
+                          if (n < msgUntil) {
+                              p.textSize = 40 * d; p.textAlign = Paint.Align.CENTER
+                              c.drawText(msg, w / 2f, h / 2f, p)
+                          }
+                          glitch(c, n)
+                      }
+
+                      private fun glitch(c: Canvas, n: Long) {
+                          val heavy = n - t0 < 2500
+                          if (!heavy && (n / 700) % 6 != 0L) return
+                          p.style = Paint.Style.FILL
+                          repeat(if (heavy) 16 else 6) {
+                              p.color = cols[Random.nextInt(cols.size)]; p.alpha = 150
+                              val y = Random.nextInt(h).toFloat()
+                              val x = Random.nextInt(w / 2).toFloat()
+                              c.drawRect(x, y, x + Random.nextInt(w / 4, w), y + Random.nextInt(3, 40) * d, p)
+                          }
+                          if (heavy) {
+                              p.color = Color.BLACK; p.alpha = 230
+                              c.drawRect(0f, h * 0.45f, w.toFloat(), h * 0.55f, p)
+                              p.color = Color.WHITE; p.alpha = 255; p.textAlign = Paint.Align.CENTER; p.textSize = 26 * d
+                              c.drawText("SYSTEM UI CRASHED", w / 2f, h * 0.51f, p)
+                          }
+                          p.alpha = 255; p.textAlign = Paint.Align.LEFT
+                      }
+
+                      override fun onTouchEvent(e: MotionEvent): Boolean {
+                          px = (e.x - pw / 2).coerceIn(0f, (w - pw).toFloat())
+                          py = (e.y - ph / 2 - 60 * d).coerceIn(h * 0.45f, h - ph - 10 * d)
+                          return true
+                      }
+                  }
+              }
+          }
+          EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.5
+      - run: gradle assembleDebug
+        working-directory: proj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: antivirus-apk
+          path: proj/app/build/outputs/apk/debug/app-debug.apk
